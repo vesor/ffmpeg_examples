@@ -22,21 +22,31 @@ extern "C"
 #include <libswresample/swresample.h>
 }
 
+#include <map>
+#include <string>
+
 #define SCALE_FLAGS SWS_BICUBIC
 
 // a wrapper around a single output AVStream
-typedef struct OutputStream {
-    AVStream *st;
-    AVCodecContext *enc;
+struct OutputStream {
+    std::string topic;
 
-    AVFrame *frame;
-    AVFrame *tmp_frame;
+    AVCodec *codec = 0;
 
-    float t, tincr, tincr2;
+    AVStream *st = 0;
+    AVCodecContext *enc = 0;
 
-    struct SwsContext *sws_ctx;
-    struct SwrContext *swr_ctx;
-} OutputStream;
+    AVFrame *frame = 0;
+    AVFrame *tmp_frame = 0;
+
+    struct SwsContext *sws_ctx = 0;
+    struct SwrContext *swr_ctx = 0;
+};
+
+std::map<std::string, OutputStream> topics_info;
+AVOutputFormat *fmt;
+AVFormatContext *oc;
+    
 
 static void log_packet(const AVFormatContext *fmt_ctx, const AVPacket *pkt)
 {
@@ -47,6 +57,15 @@ static void log_packet(const AVFormatContext *fmt_ctx, const AVPacket *pkt)
            pkt->dts, pkt->dts * time_base->num / (double)time_base->den,
            pkt->duration, pkt->duration * time_base->num / (double)time_base->den,
            pkt->stream_index);
+}
+
+static void log_metadata(const AVDictionary* metadata)
+{
+    AVDictionaryEntry *tag = NULL;
+    printf("log metadata: ");
+    while ((tag = av_dict_get(metadata, "", tag, AV_DICT_IGNORE_SUFFIX)))
+        printf("%s=%s ", tag->key, tag->value);
+    printf("\n");
 }
 
 static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
@@ -80,10 +99,15 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
         av_packet_rescale_ts(&pkt, c->time_base, st->time_base);
         pkt.stream_index = st->index;
         if (pkt.pts == 0) {
-            av_dict_set(&fmt_ctx->metadata, "pts_start_time", "2020-06-26", 0);
+            AVDictionary* metadata;
+            metadata = st->metadata;
+            // metadata = fmt_ctx->metadata;
+            av_dict_set(&metadata, "pts_start_time", "2020-06-26", 0);
             char char_arr [101];
             snprintf(char_arr, 100, "topic_%d", st->index);
-            av_dict_set(&fmt_ctx->metadata, "stream", char_arr, 0);
+            av_dict_set(&metadata, "stream", char_arr, 0);
+
+            log_metadata(metadata);
         }
         /* Write the compressed frame to the media file. */
         log_packet(fmt_ctx, &pkt);
@@ -104,7 +128,7 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
 static AVCodec* select_codec(const char** selected_codec_name)
 {
     const char* codec_names[] = {
-        "h264_nvenc", "nvenc_h264", "nvenc",
+        // "h264_nvenc", "nvenc_h264", "nvenc",
         // "h264_v4l2m2m", "h264_vaapi",
         "libx264"
     };
@@ -126,9 +150,7 @@ static AVCodec* select_codec(const char** selected_codec_name)
 }
 
 /* Add an output stream. */
-static void add_stream(OutputStream *ost, AVFormatContext *oc,
-                       AVCodec **codec,
-                       enum AVCodecID codec_id)
+static void add_stream(OutputStream *ost)
 {
     AVCodecContext *c;
     
@@ -136,27 +158,27 @@ static void add_stream(OutputStream *ost, AVFormatContext *oc,
     // *codec = avcodec_find_encoder(codec_id);
 
     const char* selected_codec_name = NULL;
-    *codec = select_codec(&selected_codec_name);
-    if (!(*codec)) {
+    ost->codec = select_codec(&selected_codec_name);
+    if (!ost->codec) {
         fprintf(stderr, "Could not find encoder\n");
         exit(1);
     }
     printf("Select codec: %s\n", selected_codec_name);
 
-    ost->st = avformat_new_stream(oc, *codec);
+    ost->st = avformat_new_stream(oc, ost->codec);
     if (!ost->st) {
         fprintf(stderr, "Could not allocate stream\n");
         exit(1);
     }
     ost->st->id = oc->nb_streams-1;
-    c = avcodec_alloc_context3(*codec);
+    c = avcodec_alloc_context3(ost->codec);
     if (!c) {
         fprintf(stderr, "Could not alloc an encoding context\n");
         exit(1);
     }
     ost->enc = c;
 
-    c->codec_id = codec_id;
+    c->codec_id = AV_CODEC_ID_NONE;
 
     if (strstr(selected_codec_name, "nvenc"))
     { // for nvenc
@@ -172,6 +194,10 @@ static void add_stream(OutputStream *ost, AVFormatContext *oc,
         // c->compression_level = 12;
         // av_opt_set(c->priv_data, "preset", "slow", 0);
         // c->bit_rate = 400000; // don't set bit rate if we use crf
+        
+        // av_opt_set(c->priv_data, "qp", "30", 0);
+        
+        // for libx264 encoder, crf will miss several seconds data in the start. Don't know why.
         av_opt_set(c->priv_data, "crf", "20", 0);
     }
     
@@ -219,7 +245,7 @@ static AVFrame *alloc_picture(enum AVPixelFormat pix_fmt, int width, int height)
     return picture;
 }
 
-static void open_video(AVFormatContext *oc, AVCodec *codec, OutputStream *ost, AVDictionary *opt_arg)
+static void open_video(OutputStream *ost, AVDictionary *opt_arg)
 {
     int ret;
     AVCodecContext *c = ost->enc;
@@ -235,7 +261,7 @@ static void open_video(AVFormatContext *oc, AVCodec *codec, OutputStream *ost, A
     }
 
     /* open the codec */
-    ret = avcodec_open2(c, codec, &opt);
+    ret = avcodec_open2(c, ost->codec, &opt);
     av_dict_free(&opt);
     if (ret < 0) {
         char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
@@ -336,7 +362,7 @@ static AVFrame *get_video_frame(OutputStream *ost, int* frame_index)
 
     int t_scale = 100;
     if (stream_index == 0) {
-        t_scale = 200;
+        t_scale = 50;
     }
 
     ost->frame->pts = *frame_index * t_scale;
@@ -364,16 +390,44 @@ static void close_stream(AVFormatContext *oc, OutputStream *ost)
     swr_free(&ost->swr_ctx);
 }
 
+void add_topic(const std::string& topic)
+{
+    OutputStream ost;
+
+    /* Add the video streams using the default format codecs
+    * and initialize the codecs. */
+    add_stream(&ost);
+
+    /* Now that all the parameters are set, we can open the 
+    * video codecs and allocate the necessary encode buffers. */
+    open_video(&ost, NULL);
+    
+    topics_info[topic] = ost;
+}
+
+void on_video_data(const std::string& topic, AVFrame* frame)
+{
+    const auto iter = topics_info.find(topic);
+
+    // Do initialize for new topic
+    if (iter == topics_info.end()) {
+        fprintf(stderr, "Topic: %s not initialized\n", topic.c_str());
+        exit(1);
+    }
+
+    auto& ost = topics_info[topic];
+    int video_eof = write_video_frame(oc, &ost, frame);
+    if (video_eof) {
+        fprintf(stderr, "Error eof stream");
+        exit(1);
+    }
+}
+
 int main(int argc, char **argv)
 {
-    OutputStream video_st = { 0 }, video_st2 = {0};
     const char *filename;
-    AVOutputFormat *fmt;
-    AVFormatContext *oc;
-    AVCodec *video_codec, *video_codec2;
     int ret;
-    AVDictionary *opt = NULL;
-    
+     
     if (argc < 2) {
         fprintf(stderr, "Usage: %s <output file>\n", argv[0]);
         exit(0);
@@ -397,19 +451,8 @@ int main(int argc, char **argv)
     oc->oformat->video_codec = AV_CODEC_ID_NONE; // clear the default codec id, we will alloc codec directly in later.
     fmt = oc->oformat;
 
-    /* Add the video streams using the default format codecs
-     * and initialize the codecs. */
-    // if (fmt->video_codec != AV_CODEC_ID_NONE) 
-    {
-        printf("Guessed video codec: %s\n", avcodec_get_name(fmt->video_codec));
-        add_stream(&video_st, oc, &video_codec, fmt->video_codec);
-        add_stream(&video_st2, oc, &video_codec2, fmt->video_codec);
-    }
-
-    /* Now that all the parameters are set, we can open the 
-     * video codecs and allocate the necessary encode buffers. */
-    open_video(oc, video_codec, &video_st, opt);
-    open_video(oc, video_codec2, &video_st2, opt);
+    add_topic("/camera0");
+    // add_topic("/camera1");
 
     av_dump_format(oc, 0, filename, 1);
 
@@ -425,6 +468,7 @@ int main(int argc, char **argv)
     }
 
     /* Write the stream header, if any. */
+    AVDictionary *opt = NULL;
     ret = avformat_write_header(oc, &opt);
     if (ret < 0) {
         char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
@@ -433,31 +477,28 @@ int main(int argc, char **argv)
         return 1;
     }
 
-    static int s_frame_index = 0;
-    static int s_frame_index2 = 0;
-
+    int s_frame_index[2] = {0, 0};
+    
     while (1) {
         /* select the stream to encode */
-
-        AVFrame *frame = get_video_frame(&video_st, &s_frame_index);
-        if (frame) {
-            int video_eof = write_video_frame(oc, &video_st, frame);
-            if (video_eof) {
-                fprintf(stderr, "Error eof stream");
-                exit(1);
-            }
-        } 
-        
-        AVFrame *frame2 = get_video_frame(&video_st2, &s_frame_index2);
-        if (frame2) {
-            int video_eof = write_video_frame(oc, &video_st2, frame2);
-            if (video_eof) {
-                fprintf(stderr, "Error eof stream2");
-                exit(1);
-            }
+        bool has_frame = false;
+        int topic_index = 0;
+        for (auto& pr : topics_info) {
+            AVFrame *frame = get_video_frame(&pr.second, &s_frame_index[topic_index]);
+            if (frame) {
+                printf("frame_index %i\n", s_frame_index[topic_index]);
+                on_video_data("/camera"+std::to_string(topic_index), frame);
+                has_frame = true;
+            } 
+            ++topic_index;
         }
 
-        if (!frame && !frame2) break; //all streams end
+        if (!has_frame) break; //all streams end
+    }
+
+    
+    for (const auto& pr : topics_info) {
+        log_metadata(pr.second.st->metadata);
     }
 
     /* Write the trailer, if any. The trailer must be written before you
@@ -467,7 +508,9 @@ int main(int argc, char **argv)
     av_write_trailer(oc);
 
     /* Close each codec. */
-    close_stream(oc, &video_st);
+    for (auto& pr : topics_info) {
+        close_stream(oc, &pr.second);
+    }
 
     if (!(fmt->flags & AVFMT_NOFILE))
         /* Close the output file. */
