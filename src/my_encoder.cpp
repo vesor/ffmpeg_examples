@@ -86,14 +86,18 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
         AVPacket pkt = { 0 };
 
         ret = avcodec_receive_packet(c, &pkt);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
+        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
+            // fprintf(stderr, "Error, need more frame. \n");
             break;
-        else if (ret < 0) {
+        } else if (ret < 0) {
             char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
             av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
             fprintf(stderr, "Error encoding a frame: %s\n", errbuf);
             exit(1);
         }
+
+        // force setting packet pts. Some codec needs more frames to produce one packet, especially when encoding starts.
+        pkt.pts = frame->pts; 
 
         /* rescale output packet timestamp values from codec to stream timebase */
         av_packet_rescale_ts(&pkt, c->time_base, st->time_base);
@@ -128,7 +132,7 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
 static AVCodec* select_codec(const char** selected_codec_name)
 {
     const char* codec_names[] = {
-        // "h264_nvenc", "nvenc_h264", "nvenc",
+        "h264_nvenc", "nvenc_h264", "nvenc",
         // "h264_v4l2m2m", "h264_vaapi",
         "libx264"
     };
@@ -197,7 +201,6 @@ static void add_stream(OutputStream *ost)
         
         // av_opt_set(c->priv_data, "qp", "30", 0);
         
-        // for libx264 encoder, crf will miss several seconds data in the start. Don't know why.
         av_opt_set(c->priv_data, "crf", "20", 0);
     }
     
@@ -362,7 +365,7 @@ static AVFrame *get_video_frame(OutputStream *ost, int* frame_index)
 
     int t_scale = 100;
     if (stream_index == 0) {
-        t_scale = 50;
+        t_scale = 200;
     }
 
     ost->frame->pts = *frame_index * t_scale;
@@ -452,7 +455,7 @@ int main(int argc, char **argv)
     fmt = oc->oformat;
 
     add_topic("/camera0");
-    // add_topic("/camera1");
+    add_topic("/camera1");
 
     av_dump_format(oc, 0, filename, 1);
 
@@ -484,9 +487,9 @@ int main(int argc, char **argv)
         bool has_frame = false;
         int topic_index = 0;
         for (auto& pr : topics_info) {
+            // printf("topic_index %i frame_index %i\n", topic_index, s_frame_index[topic_index]);
             AVFrame *frame = get_video_frame(&pr.second, &s_frame_index[topic_index]);
             if (frame) {
-                printf("frame_index %i\n", s_frame_index[topic_index]);
                 on_video_data("/camera"+std::to_string(topic_index), frame);
                 has_frame = true;
             } 
