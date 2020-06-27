@@ -41,13 +41,17 @@ file(GLOB SRC_CODE
     "src/*.c"
 )
 
-add_executable(my_encoder my_encoder.c)
-target_link_libraries(my_encoder PRIVATE
+set(ALL_LIBS 
   PkgConfig::LIBAV
   cudnn ${CUDA_CUBLAS_LIBRARIES}  
   ${OpenCV_LIBS}
   ${CUDA_npp_LIBRARY}
   ${CUDA_LIBRARIES}
   pthread
+)
+
+add_executable(my_encoder src/my_encoder.c)
+target_link_libraries(my_encoder PRIVATE
+  ${ALL_LIBS}
 )
 
