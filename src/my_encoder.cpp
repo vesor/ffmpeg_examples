@@ -1,9 +1,17 @@
 
+#include "my_encoder.h"
+
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 #include <math.h>
 
+#define __STDC_LIMIT_MACROS
+#define __STDC_CONSTANT_MACROS
+#define __STDC_FORMAT_MACROS
+
+extern "C"
+{
 #include <libavutil/avassert.h>
 #include <libavutil/channel_layout.h>
 #include <libavutil/opt.h>
@@ -12,7 +20,7 @@
 #include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
 #include <libswresample/swresample.h>
-
+}
 
 #define SCALE_FLAGS SWS_BICUBIC
 
@@ -34,10 +42,10 @@ static void log_packet(const AVFormatContext *fmt_ctx, const AVPacket *pkt)
 {
     AVRational *time_base = &fmt_ctx->streams[pkt->stream_index]->time_base;
 
-    printf("pts:%s pts_time:%s dts:%s dts_time:%s duration:%s duration_time:%s stream_index:%d\n",
-           av_ts2str(pkt->pts), av_ts2timestr(pkt->pts, time_base),
-           av_ts2str(pkt->dts), av_ts2timestr(pkt->dts, time_base),
-           av_ts2str(pkt->duration), av_ts2timestr(pkt->duration, time_base),
+    printf("pts:%ld pts_time:%f dts:%ld dts_time:%f duration:%ld duration_time:%f stream_index:%d\n",
+           pkt->pts, pkt->pts * time_base->num / (double)time_base->den,
+           pkt->dts, pkt->dts * time_base->num / (double)time_base->den,
+           pkt->duration, pkt->duration * time_base->num / (double)time_base->den,
            pkt->stream_index);
 }
 
@@ -49,8 +57,9 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
     // send the frame to the encoder
     ret = avcodec_send_frame(c, frame);
     if (ret < 0) {
-        fprintf(stderr, "Error sending a frame to the encoder: %s\n",
-                av_err2str(ret));
+        char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+        av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+        fprintf(stderr, "Error sending a frame to the encoder: %s\n", errbuf);
         exit(1);
     }
 
@@ -61,7 +70,9 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
         if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF)
             break;
         else if (ret < 0) {
-            fprintf(stderr, "Error encoding a frame: %s\n", av_err2str(ret));
+            char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+            av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+            fprintf(stderr, "Error encoding a frame: %s\n", errbuf);
             exit(1);
         }
 
@@ -70,6 +81,9 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
         pkt.stream_index = st->index;
         if (pkt.pts == 0) {
             av_dict_set(&fmt_ctx->metadata, "pts_start_time", "2020-06-26", 0);
+            char char_arr [101];
+            snprintf(char_arr, 100, "topic_%d", st->index);
+            av_dict_set(&fmt_ctx->metadata, "stream", char_arr, 0);
         }
         /* Write the compressed frame to the media file. */
         log_packet(fmt_ctx, &pkt);
@@ -77,7 +91,9 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
 
         av_packet_unref(&pkt);
         if (ret < 0) {
-            fprintf(stderr, "Error while writing output packet: %s\n", av_err2str(ret));
+            char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+            av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+            fprintf(stderr, "Error while writing output packet: %s\n", errbuf);
             exit(1);
         }
     }
@@ -222,7 +238,9 @@ static void open_video(AVFormatContext *oc, AVCodec *codec, OutputStream *ost, A
     ret = avcodec_open2(c, codec, &opt);
     av_dict_free(&opt);
     if (ret < 0) {
-        fprintf(stderr, "Could not open video codec: %s\n", av_err2str(ret));
+        char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+        av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+        fprintf(stderr, "Could not open video codec: %s\n", errbuf);
         exit(1);
     }
 
@@ -254,7 +272,7 @@ static void open_video(AVFormatContext *oc, AVCodec *codec, OutputStream *ost, A
 }
 
 /* Prepare a dummy image. */
-static void fill_yuv_image(AVFrame *pict, int frame_index,
+static void fill_yuv_image(AVFrame *pict, int stream_index, int frame_index,
                            int width, int height)
 {
     int x, y, i;
@@ -264,23 +282,29 @@ static void fill_yuv_image(AVFrame *pict, int frame_index,
     /* Y */
     for (y = 0; y < height; y++)
         for (x = 0; x < width; x++)
-            pict->data[0][y * pict->linesize[0] + x] = x + y + i * 3;
+            pict->data[0][y * pict->linesize[0] + x] = (x + y + i * 3)/(2 - stream_index);
 
     /* Cb and Cr */
     for (y = 0; y < height / 2; y++) {
         for (x = 0; x < width / 2; x++) {
-            pict->data[1][y * pict->linesize[1] + x] = 128 + y + i * 2;
-            pict->data[2][y * pict->linesize[2] + x] = 64 + x + i * 5;
+            pict->data[1][y * pict->linesize[1] + x] = (128 + y + i * 2)/(2 - stream_index);
+            pict->data[2][y * pict->linesize[2] + x] = (64 + x + i * 5)/(2 - stream_index);
         }
     }
 }
 
-static AVFrame *get_video_frame(OutputStream *ost)
+static AVFrame *get_video_frame(OutputStream *ost, int* frame_index)
 {
     AVCodecContext *c = ost->enc;
 
-    static int s_frame_index = 0;
-    if (s_frame_index > 100) return NULL;
+    int stream_index = ost->st->index;
+
+    if (stream_index == 0) {
+        if (*frame_index > 100) return NULL;
+    } else {
+        if (*frame_index > 50) return NULL;
+    }
+    
     
     /* when we pass a frame to the encoder, it may keep a reference to it
      * internally; make sure we do not overwrite it here */
@@ -302,16 +326,21 @@ static AVFrame *get_video_frame(OutputStream *ost)
                 exit(1);
             }
         }
-        fill_yuv_image(ost->tmp_frame, s_frame_index, c->width, c->height);
+        fill_yuv_image(ost->tmp_frame, stream_index, *frame_index, c->width, c->height);
         sws_scale(ost->sws_ctx, (const uint8_t * const *) ost->tmp_frame->data,
                   ost->tmp_frame->linesize, 0, c->height, ost->frame->data,
                   ost->frame->linesize);
     } else {
-        fill_yuv_image(ost->frame, s_frame_index, c->width, c->height);
+        fill_yuv_image(ost->frame, stream_index, *frame_index, c->width, c->height);
     }
 
-    ost->frame->pts = s_frame_index * 100;
-    ++s_frame_index;
+    int t_scale = 100;
+    if (stream_index == 0) {
+        t_scale = 200;
+    }
+
+    ost->frame->pts = *frame_index * t_scale;
+    *frame_index += 1;
 
     return ost->frame;
 }
@@ -320,9 +349,9 @@ static AVFrame *get_video_frame(OutputStream *ost)
  * encode one video frame and send it to the muxer
  * return 1 when encoding is finished, 0 otherwise
  */
-static int write_video_frame(AVFormatContext *oc, OutputStream *ost)
+static int write_video_frame(AVFormatContext *oc, OutputStream *ost, AVFrame* frame)
 {
-    return write_frame(oc, ost->enc, ost->st, get_video_frame(ost));
+    return write_frame(oc, ost->enc, ost->st, frame);
 
 }
 
@@ -337,11 +366,11 @@ static void close_stream(AVFormatContext *oc, OutputStream *ost)
 
 int main(int argc, char **argv)
 {
-    OutputStream video_st = { 0 };
+    OutputStream video_st = { 0 }, video_st2 = {0};
     const char *filename;
     AVOutputFormat *fmt;
     AVFormatContext *oc;
-    AVCodec *video_codec;
+    AVCodec *video_codec, *video_codec2;
     int ret;
     AVDictionary *opt = NULL;
     
@@ -374,11 +403,13 @@ int main(int argc, char **argv)
     {
         printf("Guessed video codec: %s\n", avcodec_get_name(fmt->video_codec));
         add_stream(&video_st, oc, &video_codec, fmt->video_codec);
+        add_stream(&video_st2, oc, &video_codec2, fmt->video_codec);
     }
 
     /* Now that all the parameters are set, we can open the 
      * video codecs and allocate the necessary encode buffers. */
     open_video(oc, video_codec, &video_st, opt);
+    open_video(oc, video_codec2, &video_st2, opt);
 
     av_dump_format(oc, 0, filename, 1);
 
@@ -386,8 +417,9 @@ int main(int argc, char **argv)
     if (!(fmt->flags & AVFMT_NOFILE)) {
         ret = avio_open(&oc->pb, filename, AVIO_FLAG_WRITE);
         if (ret < 0) {
-            fprintf(stderr, "Could not open '%s': %s\n", filename,
-                    av_err2str(ret));
+            char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+            av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+            fprintf(stderr, "Could not open '%s': %s\n", filename, errbuf);
             return 1;
         }
     }
@@ -395,13 +427,37 @@ int main(int argc, char **argv)
     /* Write the stream header, if any. */
     ret = avformat_write_header(oc, &opt);
     if (ret < 0) {
-        fprintf(stderr, "Error occurred when opening output file: %s\n",
-                av_err2str(ret));
+        char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+        av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+        fprintf(stderr, "Error occurred when opening output file: %s\n", errbuf);
         return 1;
     }
 
-    while (!write_video_frame(oc, &video_st)) {
+    static int s_frame_index = 0;
+    static int s_frame_index2 = 0;
+
+    while (1) {
+        /* select the stream to encode */
+
+        AVFrame *frame = get_video_frame(&video_st, &s_frame_index);
+        if (frame) {
+            int video_eof = write_video_frame(oc, &video_st, frame);
+            if (video_eof) {
+                fprintf(stderr, "Error eof stream");
+                exit(1);
+            }
+        } 
         
+        AVFrame *frame2 = get_video_frame(&video_st2, &s_frame_index2);
+        if (frame2) {
+            int video_eof = write_video_frame(oc, &video_st2, frame2);
+            if (video_eof) {
+                fprintf(stderr, "Error eof stream2");
+                exit(1);
+            }
+        }
+
+        if (!frame && !frame2) break; //all streams end
     }
 
     /* Write the trailer, if any. The trailer must be written before you

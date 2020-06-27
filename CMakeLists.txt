@@ -50,7 +50,7 @@ set(ALL_LIBS
   pthread
 )
 
-add_executable(my_encoder src/my_encoder.c)
+add_executable(my_encoder src/my_encoder.cpp)
 target_link_libraries(my_encoder PRIVATE
   ${ALL_LIBS}
 )
