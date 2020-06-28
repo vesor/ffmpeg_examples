@@ -95,76 +95,95 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
         printf("Flush codec.\n");
     }
 
-    // send the frame to the encoder
-    ret = avcodec_send_frame(c, frame);
-    if (ret < 0) {
-        char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
-        av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-        fprintf(stderr, "Error sending a frame to the encoder: %s\n", errbuf);
-        exit(1);
-    }
-
-    bool frame_wrote = false;
-    while (ret >= 0) {
-        AVPacket pkt = { 0 };
-
-        ret = avcodec_receive_packet(c, &pkt);
-        if (ret == AVERROR(EAGAIN)) {
-            // printf("Codec need more input. \n");
-            break;
-        } else if (ret == AVERROR_EOF) {
-            fprintf(stderr, "Codec eof. \n");
-            break;
-        } else if (ret < 0) {
-            char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
-            av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-            fprintf(stderr, "Error encoding a frame: %s\n", errbuf);
-            exit(1);
-        }
-
-        // static uint64_t privateId = 0;
-        // // Allocate dictionary and add appropriate key/value record
-        // AVDictionary * frameDict = NULL;
-        // av_dict_set(&frameDict, "private_id", std::to_string(privateId++).c_str(), 0);
-        // // Pack dictionary to be able to use it as a side data in AVPacket
-        // int frameDictSize = 0;
-        // uint8_t *frameDictData = av_packet_pack_dictionary(frameDict, &frameDictSize);
-        // // Free dictionary not used any more
-        // av_dict_free(&frameDict);
-        // // Add side_data to AVPacket which will be decoded
-        // av_packet_add_side_data(&pkt, AVPacketSideDataType::AV_PKT_DATA_STRINGS_METADATA, frameDictData, frameDictSize);
-
-        /* rescale output packet timestamp values from codec to stream timebase */
-        av_packet_rescale_ts(&pkt, c->time_base, st->time_base);
-        pkt.stream_index = st->index;
-        if (pkt.pts == 0) {
-            AVDictionary* metadata;
-            metadata = st->metadata;
-            // metadata = fmt_ctx->metadata;
-            av_dict_set(&metadata, "pts_start_time", "2020-06-26", 0);
-            char char_arr [101];
-            snprintf(char_arr, 100, "topic_%d", st->index);
-            av_dict_set(&metadata, "stream", char_arr, 0);
-
-            log_metadata(metadata);
-        }
-        /* Write the compressed frame to the media file. */
-        log_packet(fmt_ctx, &pkt);
-        ret = av_interleaved_write_frame(fmt_ctx, &pkt);
-        frame_wrote = true;
-
-        av_packet_unref(&pkt);
+    if (c->codec_id != AV_CODEC_ID_NONE)
+    {
+        // send the frame to the encoder
+        ret = avcodec_send_frame(c, frame);
         if (ret < 0) {
             char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
             av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-            fprintf(stderr, "Error while writing output packet: %s\n", errbuf);
+            fprintf(stderr, "Error sending a frame to the encoder: %s\n", errbuf);
             exit(1);
         }
-    }
 
-    if (frame && !frame_wrote) {
-        fprintf(stderr, "Warning: frame buffered. Check if zerolatency is implemented by codec.\n");
-        // exit(1);
+        bool frame_wrote = false;
+        while (ret >= 0) {
+            AVPacket pkt = { 0 };
+
+            ret = avcodec_receive_packet(c, &pkt);
+            if (ret == AVERROR(EAGAIN)) {
+                // printf("Codec need more input. \n");
+                break;
+            } else if (ret == AVERROR_EOF) {
+                fprintf(stderr, "Codec eof. \n");
+                break;
+            } else if (ret < 0) {
+                char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+                av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+                fprintf(stderr, "Error encoding a frame: %s\n", errbuf);
+                exit(1);
+            }
+
+            // static uint64_t privateId = 0;
+            // // Allocate dictionary and add appropriate key/value record
+            // AVDictionary * frameDict = NULL;
+            // av_dict_set(&frameDict, "private_id", std::to_string(privateId++).c_str(), 0);
+            // // Pack dictionary to be able to use it as a side data in AVPacket
+            // int frameDictSize = 0;
+            // uint8_t *frameDictData = av_packet_pack_dictionary(frameDict, &frameDictSize);
+            // // Free dictionary not used any more
+            // av_dict_free(&frameDict);
+            // // Add side_data to AVPacket which will be decoded
+            // av_packet_add_side_data(&pkt, AVPacketSideDataType::AV_PKT_DATA_STRINGS_METADATA, frameDictData, frameDictSize);
+
+            /* rescale output packet timestamp values from codec to stream timebase */
+            av_packet_rescale_ts(&pkt, c->time_base, st->time_base);
+            pkt.stream_index = st->index;
+            if (pkt.pts == 0) {
+                AVDictionary* metadata;
+                metadata = st->metadata;
+                // metadata = fmt_ctx->metadata;
+                av_dict_set(&metadata, "pts_start_time", "2020-06-26", 0);
+                char char_arr [101];
+                snprintf(char_arr, 100, "topic_%d", st->index);
+                av_dict_set(&metadata, "stream", char_arr, 0);
+
+                log_metadata(metadata);
+            }
+            /* Write the compressed frame to the media file. */
+            log_packet(fmt_ctx, &pkt);
+            ret = av_interleaved_write_frame(fmt_ctx, &pkt);
+            frame_wrote = true;
+
+            av_packet_unref(&pkt);
+            if (ret < 0) {
+                char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+                av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+                fprintf(stderr, "Error while writing output packet: %s\n", errbuf);
+                exit(1);
+            }
+        }
+
+        if (frame && !frame_wrote) {
+            fprintf(stderr, "Warning: frame buffered. Check if zerolatency is implemented by codec.\n");
+            // exit(1);
+        }
+    } else {
+
+        if (frame) {
+            AVPacket pkt = {0};
+            av_new_packet(&pkt, DATA_FRAME_SIZE);
+            // pkt.buf = frame->buf[0];
+            // av_buffer_ref(pkt.buf);
+            // pkt.data = pkt.buf->data;
+            // pkt.size = DATA_FRAME_SIZE;
+            pkt.pts = frame->pts;
+            pkt.dts = frame->pts;
+            log_packet(fmt_ctx, &pkt);
+            ret = av_interleaved_write_frame(fmt_ctx, &pkt);
+        } else {
+            ret = AVERROR_EOF;
+        }
     }
 
     return ret == AVERROR_EOF ? 1 : 0;
@@ -212,6 +231,7 @@ static void add_stream(OutputStream *ost, const AVMediaType media_type)
         printf("Select video codec: %s\n", video_codec_name);
     } else if (media_type == AVMEDIA_TYPE_DATA) {
         ost->codec = avcodec_find_encoder(AV_CODEC_ID_NONE); // AV_CODEC_ID_WRAPPED_AVFRAME AV_CODEC_ID_BIN_DATA
+        printf("Select data codec: %p\n", ost->codec);
     } else {
         fprintf(stderr, "AVMediaType not supported\n");
         exit(1);
@@ -230,11 +250,18 @@ static void add_stream(OutputStream *ost, const AVMediaType media_type)
     }
     ost->enc = c;
 
-    c->codec_id = ost->codec->id;
+    if (ost->codec) {
+        c->codec_id = ost->codec->id;
+        
+        // no need, done in avcodec_parameters_from_context
+        // ost->st->codecpar->codec_id = ost->codec->id;
+        // printf("Stream codecpar:%i\n", ost->st->codecpar->codec_id);
+        
+    } else {
+        c->codec_id = AV_CODEC_ID_NONE;
+        c->codec_type = AVMEDIA_TYPE_DATA;
+    }
 
-    // no need, done in avcodec_parameters_from_context
-    // ost->st->codecpar->codec_id = ost->codec->id;
-    // printf("Stream codecpar:%i\n", ost->st->codecpar->codec_id);
     
     if (media_type == AVMEDIA_TYPE_VIDEO) {
         
@@ -260,13 +287,21 @@ static void add_stream(OutputStream *ost, const AVMediaType media_type)
             // av_opt_set(c->priv_data, "qp", "30", 0);
             av_opt_set(c->priv_data, "crf", "20", 0);
         }
+
+        /* Resolution must be a multiple of two. */
+        c->width    = 1280;
+        c->height   = 720;
+
+        c->gop_size      = 8; /* emit one intra frame every 8 frames at most */
+        c->pix_fmt       = AV_PIX_FMT_YUV420P;
+        c->max_b_frames = 0; //disable B frames
+        
+        
     } else if (media_type == AVMEDIA_TYPE_DATA) {
         
     }
 
-    /* Resolution must be a multiple of two. */
-    c->width    = 1280;
-    c->height   = 720;
+    
     /* timebase: This is the fundamental unit of time (in seconds) in terms
         * of which frame timestamps are represented. For fixed-fps content,
         * timebase should be 1/framerate and timestamp increments should be
@@ -275,9 +310,6 @@ static void add_stream(OutputStream *ost, const AVMediaType media_type)
     c->time_base = (AVRational){1, 1000}; // set time unit as 1e-3 second
     ost->st->time_base = c->time_base;
 
-    c->gop_size      = 8; /* emit one intra frame every 8 frames at most */
-    c->pix_fmt       = AV_PIX_FMT_YUV420P;
-    c->max_b_frames = 0; //disable B frames
     
     /* Some formats want stream headers to be separate. */
     if (oc->oformat->flags & AVFMT_GLOBALHEADER)
@@ -337,14 +369,16 @@ static void open_stream(OutputStream *ost, AVDictionary *opt_arg, const AVMediaT
         // av_dict_set(&opt,"profile","main",0);
     }
 
-    /* open the codec */
-    ret = avcodec_open2(c, ost->codec, &opt);
-    av_dict_free(&opt);
-    if (ret < 0) {
-        char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
-        av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
-        fprintf(stderr, "Could not open video codec: %s\n", errbuf);
-        exit(1);
+    if (c->codec_id != AV_CODEC_ID_NONE) {
+        /* open the codec */
+        ret = avcodec_open2(c, ost->codec, &opt);
+        av_dict_free(&opt);
+        if (ret < 0) {
+            char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
+            av_strerror(ret, errbuf, AV_ERROR_MAX_STRING_SIZE);
+            fprintf(stderr, "Could not open video codec: %s\n", errbuf);
+            exit(1);
+        }
     }
 
     if (media_type == AVMEDIA_TYPE_VIDEO) {
@@ -376,6 +410,12 @@ static void open_stream(OutputStream *ost, AVDictionary *opt_arg, const AVMediaT
         fprintf(stderr, "Could not copy the stream parameters\n");
         exit(1);
     }
+
+    {
+        AVCodecParameters *par = ost->st->codecpar;
+        printf("Codecpar: %i %i\n", par->codec_id, par->codec_type);
+    }
+    
 }
 
 /* Prepare a dummy image. */
@@ -412,7 +452,7 @@ static AVFrame *get_video_frame(OutputStream *ost, int* frame_index)
         if (*frame_index > 100) return NULL;
     }
 
-    printf("stream_index %i frame_index %i\n", stream_index, *frame_index);    
+    printf("video stream_index %i frame_index %i\n", stream_index, *frame_index);    
     
     /* when we pass a frame to the encoder, it may keep a reference to it
      * internally; make sure we do not overwrite it here */
@@ -457,11 +497,17 @@ static AVFrame *get_data_frame(OutputStream *ost, int* frame_index)
 {
     if (*frame_index > 25) return NULL;
 
+    printf("data frame_index %i\n", *frame_index);   
+
     AVFrame *frame = ost->frame;
     
     uint8_t *q = frame->data[0];
 
     snprintf((char*)q, DATA_FRAME_SIZE, "data %i", *frame_index);
+
+    int t_scale = 200;
+    ost->frame->pts = *frame_index * t_scale;
+    *frame_index += 1;
 
     return frame;
 }
@@ -549,8 +595,8 @@ int main(int argc, char **argv)
     fmt = oc->oformat;
 
     add_topic("/camera0", AVMEDIA_TYPE_VIDEO);
-    add_topic("/camera1", AVMEDIA_TYPE_VIDEO);
-    // add_topic("/data0", AVMEDIA_TYPE_DATA);
+    // add_topic("/camera1", AVMEDIA_TYPE_VIDEO);
+    add_topic("/data0", AVMEDIA_TYPE_DATA);
 
     av_dump_format(oc, 0, filename, 1);
 
@@ -581,11 +627,12 @@ int main(int argc, char **argv)
         /* select the stream to encode */
         bool has_frame = false;
         for (auto& pr : topics_info) {
-            int stream_index = pr.second.st->index;
-            const AVMediaType codec_type = pr.second.st->codecpar->codec_type;
-            AVFrame *frame = get_frame(&pr.second, &s_frame_index[stream_index], codec_type);
+            auto& ost = pr.second;
+            int stream_index = ost.st->index;
+            const AVMediaType codec_type = ost.st->codecpar->codec_type;
+            AVFrame *frame = get_frame(&ost, &s_frame_index[stream_index], codec_type);
             if (frame) {
-                on_frame(pr.second.topic, frame, codec_type);
+                on_frame(ost.topic, frame, codec_type);
                 has_frame = true;
             }
         }
