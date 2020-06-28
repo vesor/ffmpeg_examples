@@ -73,12 +73,18 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
 {
     int ret;
 
-    // test metadata
-    av_dict_set(&frame->metadata, "meta_pts", std::to_string(frame->pts).c_str(), 0);
-    AVFrameSideData* sd = av_frame_new_side_data(frame, AV_FRAME_DATA_GOP_TIMECODE,
-                                 sizeof(int64_t));
-    if (!sd)
-        return AVERROR(ENOMEM);
+    if (frame) {
+        // test metadata
+        av_dict_set(&frame->metadata, "meta_pts", std::to_string(frame->pts).c_str(), 0);
+        AVFrameSideData* sd = av_frame_new_side_data(frame, AV_FRAME_DATA_GOP_TIMECODE,
+                                    sizeof(int64_t));
+        if (!sd)
+            return AVERROR(ENOMEM);
+    } else {
+        // frame == NULL is flush request
+
+        printf("Flush codec.\n");
+    }
 
     // send the frame to the encoder
     ret = avcodec_send_frame(c, frame);
@@ -106,9 +112,6 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
             fprintf(stderr, "Error encoding a frame: %s\n", errbuf);
             exit(1);
         }
-
-        // force setting packet pts. Some codec needs more frames to produce one packet, especially when encoding starts.
-        pkt.pts = frame->pts; 
 
         /* rescale output packet timestamp values from codec to stream timebase */
         av_packet_rescale_ts(&pkt, c->time_base, st->time_base);
@@ -138,8 +141,8 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
         }
     }
 
-    if (!frame_coded) {
-        fprintf(stderr, "Error: frame not coded as packet. Check if zerolatency is implemented by codec.\n");
+    if (frame && !frame_coded) {
+        fprintf(stderr, "Warning: frame buffered. Check if zerolatency is implemented by codec.\n");
         // exit(1);
     }
 
@@ -209,7 +212,7 @@ static void add_stream(OutputStream *ost)
         // av_opt_set(c->priv_data, "cq", "1", 0);
 
         av_opt_set(c->priv_data, "preset", "fast", 0);
-        av_opt_set(c->priv_data, "zerolatency", "1", 0);
+        // av_opt_set(c->priv_data, "zerolatency", "1", 0);
         av_opt_set(c->priv_data, "rc", "constqp", 0);
         av_opt_set(c->priv_data, "qp", "30", 0);
     } else {
@@ -219,7 +222,7 @@ static void add_stream(OutputStream *ost)
         // c->bit_rate = 400000; // don't set bit rate if we use crf
         
         av_opt_set(c->priv_data, "preset", "fast", 0);
-        av_opt_set(c->priv_data, "tune", "zerolatency", 0);
+        // av_opt_set(c->priv_data, "tune", "zerolatency", 0);
         // av_opt_set(c->priv_data, "qp", "30", 0);
         av_opt_set(c->priv_data, "crf", "20", 0);
     }
@@ -347,11 +350,12 @@ static AVFrame *get_video_frame(OutputStream *ost, int* frame_index)
     int stream_index = ost->st->index;
 
     if (stream_index == 0) {
-        if (*frame_index > 100) return NULL;
+        if (*frame_index > 25) return NULL;
     } else {
-        if (*frame_index > 50) return NULL;
+        if (*frame_index > 100) return NULL;
     }
-    
+
+    printf("stream_index %i frame_index %i\n", stream_index, *frame_index);    
     
     /* when we pass a frame to the encoder, it may keep a reference to it
      * internally; make sure we do not overwrite it here */
@@ -396,7 +400,7 @@ static AVFrame *get_video_frame(OutputStream *ost, int* frame_index)
  * encode one video frame and send it to the muxer
  * return 1 when encoding is finished, 0 otherwise
  */
-static int write_video_frame(AVFormatContext *oc, OutputStream *ost, AVFrame* frame)
+static int write_video_frame(OutputStream *ost, AVFrame* frame)
 {
     return write_frame(oc, ost->enc, ost->st, frame);
 
@@ -437,7 +441,7 @@ void on_video_data(const std::string& topic, AVFrame* frame)
     }
 
     auto& ost = topics_info[topic];
-    int video_eof = write_video_frame(oc, &ost, frame);
+    int video_eof = write_video_frame(&ost, frame);
     if (video_eof) {
         fprintf(stderr, "Error eof stream");
         exit(1);
@@ -505,7 +509,6 @@ int main(int argc, char **argv)
         bool has_frame = false;
         int topic_index = 0;
         for (auto& pr : topics_info) {
-            // printf("topic_index %i frame_index %i\n", topic_index, s_frame_index[topic_index]);
             AVFrame *frame = get_video_frame(&pr.second, &s_frame_index[topic_index]);
             if (frame) {
                 on_video_data("/camera"+std::to_string(topic_index), frame);
@@ -515,6 +518,11 @@ int main(int argc, char **argv)
         }
 
         if (!has_frame) break; //all streams end
+    }
+
+    // flush encoder
+    for (auto& pr : topics_info) {
+        write_video_frame(&pr.second, NULL);
     }
 
     
