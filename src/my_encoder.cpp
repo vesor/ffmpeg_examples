@@ -73,6 +73,13 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
 {
     int ret;
 
+    // test metadata
+    av_dict_set(&frame->metadata, "meta_pts", std::to_string(frame->pts).c_str(), 0);
+    AVFrameSideData* sd = av_frame_new_side_data(frame, AV_FRAME_DATA_GOP_TIMECODE,
+                                 sizeof(int64_t));
+    if (!sd)
+        return AVERROR(ENOMEM);
+
     // send the frame to the encoder
     ret = avcodec_send_frame(c, frame);
     if (ret < 0) {
@@ -82,12 +89,16 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
         exit(1);
     }
 
+    bool frame_coded = false;
     while (ret >= 0) {
         AVPacket pkt = { 0 };
 
         ret = avcodec_receive_packet(c, &pkt);
-        if (ret == AVERROR(EAGAIN) || ret == AVERROR_EOF) {
-            // fprintf(stderr, "Error, need more frame. \n");
+        if (ret == AVERROR(EAGAIN)) {
+            // printf("Codec need more input. \n");
+            break;
+        } else if (ret == AVERROR_EOF) {
+            fprintf(stderr, "Codec eof. \n");
             break;
         } else if (ret < 0) {
             char errbuf[AV_ERROR_MAX_STRING_SIZE] = {0};
@@ -116,6 +127,7 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
         /* Write the compressed frame to the media file. */
         log_packet(fmt_ctx, &pkt);
         ret = av_interleaved_write_frame(fmt_ctx, &pkt);
+        frame_coded = true;
 
         av_packet_unref(&pkt);
         if (ret < 0) {
@@ -124,6 +136,11 @@ static int write_frame(AVFormatContext *fmt_ctx, AVCodecContext *c,
             fprintf(stderr, "Error while writing output packet: %s\n", errbuf);
             exit(1);
         }
+    }
+
+    if (!frame_coded) {
+        fprintf(stderr, "Error: frame not coded as packet. Check if zerolatency is implemented by codec.\n");
+        // exit(1);
     }
 
     return ret == AVERROR_EOF ? 1 : 0;
@@ -191,6 +208,8 @@ static void add_stream(OutputStream *ost)
         // av_opt_set(c->priv_data, "rc", "vbr_hq", 0);
         // av_opt_set(c->priv_data, "cq", "1", 0);
 
+        av_opt_set(c->priv_data, "preset", "fast", 0);
+        av_opt_set(c->priv_data, "zerolatency", "1", 0);
         av_opt_set(c->priv_data, "rc", "constqp", 0);
         av_opt_set(c->priv_data, "qp", "30", 0);
     } else {
@@ -199,8 +218,9 @@ static void add_stream(OutputStream *ost)
         // av_opt_set(c->priv_data, "preset", "slow", 0);
         // c->bit_rate = 400000; // don't set bit rate if we use crf
         
+        av_opt_set(c->priv_data, "preset", "fast", 0);
+        av_opt_set(c->priv_data, "tune", "zerolatency", 0);
         // av_opt_set(c->priv_data, "qp", "30", 0);
-        
         av_opt_set(c->priv_data, "crf", "20", 0);
     }
     
@@ -256,12 +276,10 @@ static void open_video(OutputStream *ost, AVDictionary *opt_arg)
 
     av_dict_copy(&opt, opt_arg, 0);
 
-    // if(c->codec_id == AV_CODEC_ID_H264)
-    {
-        av_dict_set(&opt,"preset","fast",0);
-        // av_dict_set(&opt,"tune","zerolatency",0);
-        // av_dict_set(&opt,"profile","main",0);
-    }
+    // av_dict_set(&opt,"preset","fast",0);
+    // av_dict_set(&opt,"tune","zerolatency",0); // don't buffer frames
+    // av_dict_set(&opt,"profile","main",0);
+
 
     /* open the codec */
     ret = avcodec_open2(c, ost->codec, &opt);
@@ -311,13 +329,13 @@ static void fill_yuv_image(AVFrame *pict, int stream_index, int frame_index,
     /* Y */
     for (y = 0; y < height; y++)
         for (x = 0; x < width; x++)
-            pict->data[0][y * pict->linesize[0] + x] = (x + y + i * 3)/(2 - stream_index);
+            pict->data[0][y * pict->linesize[0] + x] = (x + y + i * 3)/(1+stream_index);
 
     /* Cb and Cr */
     for (y = 0; y < height / 2; y++) {
         for (x = 0; x < width / 2; x++) {
-            pict->data[1][y * pict->linesize[1] + x] = (128 + y + i * 2)/(2 - stream_index);
-            pict->data[2][y * pict->linesize[2] + x] = (64 + x + i * 5)/(2 - stream_index);
+            pict->data[1][y * pict->linesize[1] + x] = (128 + y + i * 2);
+            pict->data[2][y * pict->linesize[2] + x] = (64 + x + i * 5);
         }
     }
 }

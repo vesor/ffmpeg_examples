@@ -10,8 +10,8 @@ mpv --hwdec=help
 
 # file info
 
-ffplay -vf showinfo test.mp4
-ffprobe -show_packets test.avi
+ffplay -vf showinfo test.mkv
+ffprobe -show_packets test.mkv
 
 # select from multiple video streams
 ffplay -vst v:1 test.mkv 
