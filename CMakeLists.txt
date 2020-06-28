@@ -55,3 +55,7 @@ target_link_libraries(my_encoder PRIVATE
   ${ALL_LIBS}
 )
 
+add_executable(demuxing_decoding src/demuxing_decoding.c)
+target_link_libraries(demuxing_decoding PRIVATE
+  ${ALL_LIBS}
+)

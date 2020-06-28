@@ -35,7 +35,8 @@ create ~/.config/mpv/mpv.conf:
         hwdec-codecs=all
 
 
-ref:
+
+# ref:
 https://github.com/FFmpeg/FFmpeg/tree/master/doc/examples
 
 http://dranger.com/ffmpeg/ffmpeg.html
@@ -49,4 +50,14 @@ TODO:
 https://github.com/jocover/jetson-ffmpeg    
 
 http://www.ipb.uni-bonn.de/data-software/depth-streaming-using-h-264/    
+
+# SEI
+
+https://blog.csdn.net/imliutao2/article/details/84532614
+
+https://www.jianshu.com/p/fa018c403a0a
+
+https://blog.csdn.net/passionkk/article/details/102804023
+
+https://stackoverflow.com/questions/33705840/transport-sei-with-ffmpeg
 

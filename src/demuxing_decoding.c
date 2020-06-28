@@ -72,8 +72,16 @@ static int output_video_frame(AVFrame *frame)
         return -1;
     }
 
-    printf("video_frame n:%d coded_n:%d\n",
-           video_frame_count++, frame->coded_picture_number);
+    printf("video_frame n:%d coded_n:%d pts:%ld ",
+           video_frame_count++, frame->coded_picture_number, frame->pts);
+    
+    AVDictionaryEntry *tag = NULL;
+    printf("metadata: ");
+    while ((tag = av_dict_get(frame->metadata, "", tag, AV_DICT_IGNORE_SUFFIX)))
+        printf("%s=%s ", tag->key, tag->value);
+    
+    
+    printf("\n");
 
     /* copy decoded frame to destination buffer:
      * this is required since rawvideo expects non aligned data */
@@ -109,13 +117,16 @@ static int output_audio_frame(AVFrame *frame)
 static int decode_packet(AVCodecContext *dec, const AVPacket *pkt)
 {
     int ret = 0;
-
+    
     // submit the packet to the decoder
     ret = avcodec_send_packet(dec, pkt);
     if (ret < 0) {
         fprintf(stderr, "Error submitting a packet for decoding (%s)\n", av_err2str(ret));
         return ret;
     }
+
+    if (pkt) printf("packet side_data: %i\n", pkt->side_data_elems);
+    
 
     // get all the available frames from the decoder
     while (ret >= 0) {
@@ -338,7 +349,7 @@ int main (int argc, char **argv)
 
     if (video_stream) {
         printf("Play the output video file with the command:\n"
-               "ffplay -f rawvideo -pix_fmt %s -video_size %dx%d %s\n",
+               "ffplay -f rawvideo -pixel_format %s -video_size %dx%d %s\n",
                av_get_pix_fmt_name(pix_fmt), width, height,
                video_dst_filename);
     }
