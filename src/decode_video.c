@@ -75,15 +75,15 @@ static void decode(AVCodecContext *dec_ctx, AVFrame *frame, AVPacket *pkt,
 
         /* the picture is allocated by the decoder. no need to
            free it */
-        // snprintf(buf, sizeof(buf), "%s-%d.pgm", filename, dec_ctx->frame_number);
-        // pgm_save(frame->data[0], frame->linesize[0],
-        //          frame->width, frame->height, buf);
+        snprintf(buf, sizeof(buf), "%s-%d.pgm", filename, dec_ctx->frame_number);
+        pgm_save(frame->data[0], frame->linesize[0],
+                 frame->width, frame->height, buf);
     }
 }
 
 int main(int argc, char **argv)
 {
-    const char *filename, *outfilename;
+    const char *filename, *outfilename, *decoder_name;
     const AVCodec *codec;
     AVCodecParserContext *parser;
     AVCodecContext *c= NULL;
@@ -96,12 +96,12 @@ int main(int argc, char **argv)
     AVPacket *pkt;
 
     if (argc <= 2) {
-        fprintf(stderr, "Usage: %s <input file> <output file>\n"
-                "And check your input file is encoded by mpeg1video please.\n", argv[0]);
+        fprintf(stderr, "Usage: %s <input file> <output file> <decoder>\n", argv[0]);
         exit(0);
     }
     filename    = argv[1];
     outfilename = argv[2];
+    decoder_name = argv[3];
 
     av_register_all();
 
@@ -112,8 +112,7 @@ int main(int argc, char **argv)
     /* set end of buffer to 0 (this ensures that no overreading happens for damaged MPEG streams) */
     memset(inbuf + INBUF_SIZE, 0, AV_INPUT_BUFFER_PADDING_SIZE);
 
-    /* find the MPEG-1 video decoder */
-    codec = avcodec_find_decoder(AV_CODEC_ID_MPEG1VIDEO);
+    codec = avcodec_find_decoder_by_name(decoder_name);
     if (!codec) {
         fprintf(stderr, "Codec not found\n");
         exit(1);

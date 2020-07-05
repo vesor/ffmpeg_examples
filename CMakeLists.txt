@@ -5,7 +5,7 @@ project(ffmpeg_examples)
 
 set (CMAKE_CXX_FLAGS "-std=c++11 ${CMAKE_CXX_FLAGS}")
 
-# set (CMAKE_BUILD_TYPE Debug)
+set (CMAKE_BUILD_TYPE Debug)
 
 #find_package(CUDA)
 #if (NOT CUDA_npp_LIBRARY)
@@ -57,5 +57,15 @@ target_link_libraries(my_encoder PRIVATE
 
 add_executable(demuxing_decoding src/demuxing_decoding.c)
 target_link_libraries(demuxing_decoding PRIVATE
+  ${ALL_LIBS}
+)
+
+add_executable(encode_video src/encode_video.c)
+target_link_libraries(encode_video PRIVATE
+  ${ALL_LIBS}
+)
+
+add_executable(decode_video src/decode_video.c)
+target_link_libraries(decode_video PRIVATE
   ${ALL_LIBS}
 )
